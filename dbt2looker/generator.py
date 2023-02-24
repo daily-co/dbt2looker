@@ -163,6 +163,7 @@ LOOKER_DTYPE_MAP = {
         'BYTE':        'number',
         'SHORT':       'number',
         'INTEGER':     'number',
+        'BIGINT':      'number',
         'LONG':        'number',
         'FLOAT':       'number',
         'DOUBLE':      'number',
@@ -175,6 +176,8 @@ LOOKER_DTYPE_MAP = {
         'DATE':        'datetime',
     }
 }
+LOOKER_DTYPE_MAP['databricks'] = LOOKER_DTYPE_MAP['spark']
+
 
 looker_date_time_types = ['datetime', 'timestamp']
 looker_date_types = ['date']
@@ -196,7 +199,10 @@ def normalise_spark_types(column_type: str) -> str:
 
 
 def map_adapter_type_to_looker(adapter_type: models.SupportedDbtAdapters, column_type: str):
-    normalised_column_type = (normalise_spark_types(column_type) if adapter_type == models.SupportedDbtAdapters.spark.value else column_type).upper()
+    if (adapter_type == models.SupportedDbtAdapters.spark.value or adapter_type == models.SupportedDbtAdapters.databricks.value):
+        normalised_column_type = normalise_spark_types(column_type).upper()
+    else:
+        normalised_column_type = column_type.upper()
     looker_type = LOOKER_DTYPE_MAP[adapter_type].get(normalised_column_type)
     if (column_type is not None) and (looker_type is None):
         logging.warning(f'Column type {column_type} not supported for conversion from {adapter_type} to looker. No dimension will be created.')
@@ -210,7 +216,8 @@ def lookml_date_time_dimension_group(column: models.DbtModelColumn, adapter_type
         'sql': column.meta.dimension.sql or f'${{TABLE}}.{column.name}',
         'description': column.meta.dimension.description or column.description,
         'datatype': map_adapter_type_to_looker(adapter_type, column.data_type),
-        'timeframes': ['raw', 'time', 'hour', 'date', 'week', 'month', 'quarter', 'year']
+        'timeframes': ['raw', 'time', 'hour', 'date', 'week', 'month', 'quarter', 'year'],
+        'convert_tz': 'no'
     }
 
 
@@ -221,7 +228,8 @@ def lookml_date_dimension_group(column: models.DbtModelColumn, adapter_type: mod
         'sql': column.meta.dimension.sql or f'${{TABLE}}.{column.name}',
         'description': column.meta.dimension.description or column.description,
         'datatype': map_adapter_type_to_looker(adapter_type, column.data_type),
-        'timeframes': ['raw', 'date', 'week', 'month', 'quarter', 'year']
+        'timeframes': ['raw', 'date', 'week', 'month', 'quarter', 'year'],
+        'convert_tz': 'no'
     }
 
 
@@ -308,11 +316,13 @@ def lookml_measure(measure_name: str, column: models.DbtModelColumn, measure: mo
     return m
 
 
-def lookml_view_from_dbt_model(model: models.DbtModel, adapter_type: models.SupportedDbtAdapters):
+def lookml_view_from_dbt_model(model: models.DbtModel, adapter_type: models.SupportedDbtAdapters, view_prefix: str):
+    print(f"model: {model.name}")
     lookml = {
         'view': {
-            'name': model.name,
+            'name': f'{view_prefix}{model.name}',
             'sql_table_name': model.relation_name,
+            'suggestions': 'no',
             'dimension_groups': lookml_dimension_groups_from_model(model, adapter_type),
             'dimensions': lookml_dimensions_from_model(model, adapter_type),
             'measures': lookml_measures_from_model(model),
@@ -325,7 +335,7 @@ def lookml_view_from_dbt_model(model: models.DbtModel, adapter_type: models.Supp
         len(lookml['view']['dimensions']),
     )
     contents = lkml.dump(lookml)
-    filename = f'{model.name}.view.lkml'
+    filename = f'{view_prefix}{model.name}.view.lkml'
     return models.LookViewFile(filename=filename, contents=contents)
 
 
